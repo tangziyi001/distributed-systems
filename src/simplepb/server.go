@@ -122,6 +122,7 @@ func (srv *PBServer) GetEntryAtIndex(index int) (ok bool, command interface{}) {
 // before moving on to the next test
 func (srv *PBServer) Kill() {
 	// Your code here, if necessary
+	srv = nil
 }
 
 // Make is called by tester to create and initalize a PBServer
@@ -169,7 +170,17 @@ func (srv *PBServer) Start(command interface{}) (
 	}
 
 	// Your code here
-
+	// Append command to the log
+	append(srv.log, command)
+	// send prepare messages
+	args := PrepareArgs{View: srv.currentView, PrimaryCommit: srv.commitIndex, Index: len(srv.log)-1, Entry: command}
+	var reply PutReply
+	for (i := 0; i < len(srv.peers) && i != srv.me; i++) {
+		srv.sendPrepare(srv.me, &args, &reply)
+	}
+	index := len(srv.log)-1
+	view := srv.currentView
+	ok := true
 	return index, view, ok
 }
 
@@ -196,6 +207,14 @@ func (srv *PBServer) sendPrepare(server int, args *PrepareArgs, reply *PrepareRe
 // Prepare is the RPC handler for the Prepare RPC
 func (srv *PBServer) Prepare(args *PrepareArgs, reply *PrepareReply) {
 	// Your code here
+	if (srv.currentView == args.View && args.Index == len(srv.log)) {
+		append(srv.log, args.Entry)
+		reply.Success, reply.View  = true, args.View
+	} else if (srv.currentView < args.View || len(srv.log) < args.Index) {
+		
+	} else {
+		reply.Success = false
+	}
 }
 
 // Recovery is the RPC handler for the Recovery RPC
