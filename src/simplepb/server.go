@@ -175,12 +175,19 @@ func (srv *PBServer) Start(command interface{}) (
 	// send prepare messages
 	args := PrepareArgs{View: srv.currentView, PrimaryCommit: srv.commitIndex, Index: len(srv.log)-1, Entry: command}
 	var reply PutReply
+	countSuccess = 0;
 	for (i := 0; i < len(srv.peers) && i != srv.me; i++) {
-		srv.sendPrepare(srv.me, &args, &reply)
+		res := srv.sendPrepare(i, &args, &reply)
+		if (res == true && reply.Success == true) {
+			countSuccess = countSuccess + 1
+		}
 	}
 	index := len(srv.log)-1
 	view := srv.currentView
 	ok := true
+	if (countSuccess+1 > len(srv.peers)/2) {
+		srv.committedIndex = index
+	}
 	return index, view, ok
 }
 
@@ -203,7 +210,10 @@ func (srv *PBServer) sendPrepare(server int, args *PrepareArgs, reply *PrepareRe
 	ok := srv.peers[server].Call("PBServer.Prepare", args, reply)
 	return ok
 }
-
+func (srv *PBServer) sendRecovery(server int, args *RecoveryArgs, reply *RecoveryReply) bool {
+	ok := srv.peers[server].Call("PBServer.Recovery", args, reply)
+	return ok
+}
 // Prepare is the RPC handler for the Prepare RPC
 func (srv *PBServer) Prepare(args *PrepareArgs, reply *PrepareReply) {
 	// Your code here
@@ -211,7 +221,17 @@ func (srv *PBServer) Prepare(args *PrepareArgs, reply *PrepareReply) {
 		append(srv.log, args.Entry)
 		reply.Success, reply.View  = true, args.View
 	} else if (srv.currentView < args.View || len(srv.log) < args.Index) {
-		
+		srv.status = RECOVERING
+		rcArgs := RecoveryArgs{View: args.View, Server: srv.me}
+		var rcReply RecoveryReply
+		res = srv.sendRecovery(GetPrimary(args.View, len(srv.peers)), &rcArgs, &rcReply)
+		if (res == true && rcReply.Success == true) {
+			srv.currentView = rcReply.View
+			srv.log = rcReply.Entries
+			srv.commitIndex = rcReply.PrimaryCommit
+			srv.status = NORMAL
+		}
+		reply.Success = false
 	} else {
 		reply.Success = false
 	}
@@ -220,6 +240,10 @@ func (srv *PBServer) Prepare(args *PrepareArgs, reply *PrepareReply) {
 // Recovery is the RPC handler for the Recovery RPC
 func (srv *PBServer) Recovery(args *RecoveryArgs, reply *RecoveryReply) {
 	// Your code here
+	reply.View = srv.currentView
+	reply.Entries = srv.log
+	reply.PrimaryCommit = srv.commitIndex
+	reply.Sucess = true
 }
 
 // Some external oracle prompts the primary of the newView to
