@@ -8,7 +8,7 @@ package simplepb
 
 import (
 	"sync"
-
+	//"fmt"
 	"labrpc"
 )
 
@@ -161,6 +161,7 @@ func (srv *PBServer) Start(command interface{}) (
 	index int, view int, ok bool) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
+	// fmt.Printf("Start server %d\n", srv.me)
 	// do not process command if status is not NORMAL
 	// and if i am not the primary in the current view
 	if srv.status != NORMAL {
@@ -168,25 +169,45 @@ func (srv *PBServer) Start(command interface{}) (
 	} else if GetPrimary(srv.currentView, len(srv.peers)) != srv.me {
 		return -1, srv.currentView, false
 	}
-
 	// Your code here
 	// Append command to the log
-	append(srv.log, command)
-	// send prepare messages
-	args := PrepareArgs{View: srv.currentView, PrimaryCommit: srv.commitIndex, Index: len(srv.log)-1, Entry: command}
-	var reply PutReply
-	countSuccess = 0;
-	for (i := 0; i < len(srv.peers) && i != srv.me; i++) {
-		res := srv.sendPrepare(i, &args, &reply)
-		if (res == true && reply.Success == true) {
-			countSuccess = countSuccess + 1
+	srv.log = append(srv.log, command)
+	// Send prepare messages 
+	prepareChan := make(chan int, len(srv.peers))
+	for i := 0; i < len(srv.peers); i++ {
+		if i != srv.me {
+			// fmt.Printf("Add %d\n",i)
+			prepareChan <- i
 		}
 	}
-	index := len(srv.log)-1
-	view := srv.currentView
-	ok := true
+	close(prepareChan)
+	workChan := make(chan int, len(srv.peers))
+	var wg sync.WaitGroup
+	for n := 0; n < len(srv.peers)-1; n++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			i := <- prepareChan
+			// fmt.Printf("Send prepare to %d\n", i)
+			args := PrepareArgs{View: srv.currentView, PrimaryCommit: srv.commitIndex, Index: len(srv.log)-1, Entry: command}
+			var reply PrepareReply
+			res := srv.sendPrepare(i, &args, &reply)
+			// fmt.Printf("Res i=%d, res=%d\n",i,res)
+			if (res == true && reply.Success == true) {
+				workChan <- i
+			}
+		}()
+	}
+	wg.Wait()
+	close(workChan)
+	index = len(srv.log)-1
+	view = srv.currentView
+	ok = false
+	countSuccess := len(workChan)
+	// fmt.Printf("PrepareOK Count %d\n", countSuccess)
 	if (countSuccess+1 > len(srv.peers)/2) {
-		srv.committedIndex = index
+		srv.commitIndex = index
+		ok = true
 	}
 	return index, view, ok
 }
@@ -216,15 +237,17 @@ func (srv *PBServer) sendRecovery(server int, args *RecoveryArgs, reply *Recover
 }
 // Prepare is the RPC handler for the Prepare RPC
 func (srv *PBServer) Prepare(args *PrepareArgs, reply *PrepareReply) {
+	// fmt.Printf("Prepare Handling %d\n", srv.me)
 	// Your code here
 	if (srv.currentView == args.View && args.Index == len(srv.log)) {
-		append(srv.log, args.Entry)
+		// fmt.Printf("Success %d: Log index %d\n", srv.me, len(srv.log))
+		srv.log = append(srv.log, args.Entry)
 		reply.Success, reply.View  = true, args.View
 	} else if (srv.currentView < args.View || len(srv.log) < args.Index) {
 		srv.status = RECOVERING
 		rcArgs := RecoveryArgs{View: args.View, Server: srv.me}
 		var rcReply RecoveryReply
-		res = srv.sendRecovery(GetPrimary(args.View, len(srv.peers)), &rcArgs, &rcReply)
+		res := srv.sendRecovery(GetPrimary(args.View, len(srv.peers)), &rcArgs, &rcReply)
 		if (res == true && rcReply.Success == true) {
 			srv.currentView = rcReply.View
 			srv.log = rcReply.Entries
@@ -243,7 +266,7 @@ func (srv *PBServer) Recovery(args *RecoveryArgs, reply *RecoveryReply) {
 	reply.View = srv.currentView
 	reply.Entries = srv.log
 	reply.PrimaryCommit = srv.commitIndex
-	reply.Sucess = true
+	reply.Success = true
 }
 
 // Some external oracle prompts the primary of the newView to
