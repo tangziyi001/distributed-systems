@@ -8,7 +8,7 @@ package simplepb
 
 import (
 	"sync"
-	//"fmt"
+	"fmt"
 	"labrpc"
 )
 
@@ -170,9 +170,10 @@ func (srv *PBServer) Start(command interface{}) (
 		return -1, srv.currentView, false
 	}
 	// Your code here
+	srv.lastNormalView = srv.currentView
 	// Append command to the log
 	srv.log = append(srv.log, command)
-	// Send prepare messages 
+	// Send prepare messages
 	prepareChan := make(chan int, len(srv.peers))
 	for i := 0; i < len(srv.peers); i++ {
 		if i != srv.me {
@@ -202,7 +203,7 @@ func (srv *PBServer) Start(command interface{}) (
 	close(workChan)
 	index = len(srv.log)-1
 	view = srv.currentView
-	ok = false
+	ok = true
 	countSuccess := len(workChan)
 	// fmt.Printf("PrepareOK Count %d\n", countSuccess)
 	if (countSuccess+1 > len(srv.peers)/2) {
@@ -237,24 +238,31 @@ func (srv *PBServer) sendRecovery(server int, args *RecoveryArgs, reply *Recover
 }
 // Prepare is the RPC handler for the Prepare RPC
 func (srv *PBServer) Prepare(args *PrepareArgs, reply *PrepareReply) {
-	// fmt.Printf("Prepare Handling %d\n", srv.me)
 	// Your code here
+	// srv.mu.Lock()
+	// defer srv.mu.Unlock()
+	// fmt.Printf("Prepare Handling %d\n", srv.me)
 	if (srv.currentView == args.View && args.Index == len(srv.log)) {
 		// fmt.Printf("Success %d: Log index %d\n", srv.me, len(srv.log))
 		srv.log = append(srv.log, args.Entry)
 		reply.Success, reply.View  = true, args.View
+		// Piggyback Commit
+		srv.commitIndex = args.PrimaryCommit
 	} else if (srv.currentView < args.View || len(srv.log) < args.Index) {
 		srv.status = RECOVERING
 		rcArgs := RecoveryArgs{View: args.View, Server: srv.me}
 		var rcReply RecoveryReply
+		// fmt.Printf("Send recovery from %d to %d \n", srv.me, GetPrimary(args.View, len(srv.peers)))
 		res := srv.sendRecovery(GetPrimary(args.View, len(srv.peers)), &rcArgs, &rcReply)
 		if (res == true && rcReply.Success == true) {
+			// fmt.Printf("Recovery to view %d from %d with commit %d\n", args.View, GetPrimary(args.View, len(srv.peers)), rcReply.PrimaryCommit)
 			srv.currentView = rcReply.View
+			srv.lastNormalView =  srv.currentView
 			srv.log = rcReply.Entries
 			srv.commitIndex = rcReply.PrimaryCommit
 			srv.status = NORMAL
+			reply.Success = true
 		}
-		reply.Success = false
 	} else {
 		reply.Success = false
 	}
@@ -342,15 +350,41 @@ func (srv *PBServer) PromptViewChange(newView int) {
 func (srv *PBServer) determineNewViewLog(successReplies []*ViewChangeReply) (
 	ok bool, newViewLog []interface{}) {
 	// Your code here
+	lastView := -1
+	for i := 0; i < len(successReplies); i++ {
+		if successReplies[i].LastNormalView >= lastView {
+			lastView = successReplies[i].LastNormalView
+			if len(successReplies[i].Log) > len(newViewLog) {
+				newViewLog = successReplies[i].Log
+			}
+		}
+	}
+	// fmt.Printf("Last View %d\n", lastView)
+	ok = true
 	return ok, newViewLog
 }
 
 // ViewChange is the RPC handler to process ViewChange RPC.
 func (srv *PBServer) ViewChange(args *ViewChangeArgs, reply *ViewChangeReply) {
 	// Your code here
+	if(srv.currentView < args.View) {
+		// srv.currentView = args.View
+		srv.status = VIEWCHANGE
+		reply.Success = true
+		reply.Log = srv.log
+		reply.LastNormalView = srv.lastNormalView
+	} else {
+		reply.Success = false
+	}
 }
 
 // StartView is the RPC handler to process StartView RPC.
 func (srv *PBServer) StartView(args *StartViewArgs, reply *StartViewReply) {
 	// Your code here
+	srv.status = NORMAL
+	if(srv.currentView <= args.View) {
+		srv.currentView = args.View
+		srv.log = args.Log
+		srv.lastNormalView = srv.currentView
+	}
 }
