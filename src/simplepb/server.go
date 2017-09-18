@@ -375,7 +375,7 @@ func (srv *PBServer) ViewChange(args *ViewChangeArgs, reply *ViewChangeReply) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	if(srv.currentView < args.View) {
-		srv.currentView = args.View
+		// srv.currentView = args.View
 		srv.status = VIEWCHANGE
 		reply.Success = true
 		reply.Log = srv.log
