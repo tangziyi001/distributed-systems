@@ -262,23 +262,7 @@ func (srv *PBServer) sendRecovery(server int, args *RecoveryArgs, reply *Recover
 	ok := srv.peers[server].Call("PBServer.Recovery", args, reply)
 	return ok
 }
-func (srv *PBServer) issueRecovery(view int) {
-	// fmt.Printf("Send recovery from %d to %d \n", srv.me, GetPrimary(view, len(srv.peers)))
-	rcArgs := RecoveryArgs{View: view, Server: srv.me}
-	var rcReply RecoveryReply
-	res := srv.sendRecovery(GetPrimary(view, len(srv.peers)), &rcArgs, &rcReply)
-	if (res == true && rcReply.Success == true) {
-		// Change the server state
-		srv.mu.Lock()
-		// fmt.Printf("Recovery of server %d to view %d from %d with commit %d, log %v\n", srv.me, view, GetPrimary(view, len(srv.peers)), rcReply.PrimaryCommit, rcReply.Entries)
-		srv.currentView = rcReply.View
-		srv.lastNormalView =  srv.currentView
-		srv.log = rcReply.Entries
-		srv.commitIndex = rcReply.PrimaryCommit
-		srv.status = NORMAL
-		srv.mu.Unlock()
-	}
-}
+
 // Prepare is the RPC handler for the Prepare RPC
 func (srv *PBServer) Prepare(args *PrepareArgs, reply *PrepareReply) {
 	// Your code here
@@ -312,7 +296,24 @@ func (srv *PBServer) Prepare(args *PrepareArgs, reply *PrepareReply) {
 		// fmt.Printf("Retry Initiated for server %d\n", srv.me, srv.currentView, args.View)
 		srv.prepareRetry = 0
 		srv.status = RECOVERING
-		go srv.issueRecovery(args.View)
+		// Recovery
+		go func(view int) {
+			// fmt.Printf("Send recovery from %d to %d \n", srv.me, GetPrimary(view, len(srv.peers)))
+			rcArgs := RecoveryArgs{View: view, Server: srv.me}
+			var rcReply RecoveryReply
+			res := srv.sendRecovery(GetPrimary(view, len(srv.peers)), &rcArgs, &rcReply)
+			if (res == true && rcReply.Success == true) {
+				// Change the server state
+				srv.mu.Lock()
+				// fmt.Printf("Recovery of server %d to view %d from %d with commit %d, log %v\n", srv.me, view, GetPrimary(view, len(srv.peers)), rcReply.PrimaryCommit, rcReply.Entries)
+				srv.currentView = rcReply.View
+				srv.lastNormalView =  srv.currentView
+				srv.log = rcReply.Entries
+				srv.commitIndex = rcReply.PrimaryCommit
+				srv.status = NORMAL
+				srv.mu.Unlock()
+			}
+		}(args.View)
 		reply.Success = false
 		srv.mu.Unlock()
 	} else {
