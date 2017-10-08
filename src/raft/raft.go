@@ -19,7 +19,7 @@ package raft
 
 import "sync"
 import "labrpc"
-
+import "fmt"
 // import "bytes"
 // import "encoding/gob"
 
@@ -49,7 +49,19 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	
+	// Persistent States
+	currentTerm	int
+	votedFor	int
+	log		[]interface{}
+	
+	// Volatile States
+	commitIndex	int
+	lastApplied	int
 
+	// Leaders States
+	nextIndex	[]int
+	matchIndex	[]int
 }
 
 // return currentTerm and whether this server
@@ -102,6 +114,10 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term		int
+	CandidateId	int
+	LastLogIndex	int
+	LastLogTerm	int
 }
 
 //
@@ -110,13 +126,31 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term		int
+	VoteGranted	bool
 }
 
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	// Your code here (2A, 2B).
+	fmt.Printf("RequestVote Send from %v to %v\n", args.CandidateId, rf.me)
+	if args.Term < rf.currentTerm {
+		fmt.Printf("RequestVote Failed: Term Outdated; currentTerm %d, args Term %d\n", rf.currentTerm, args.Term)
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		return
+	}
+	var updated bool
+	updated = args.LastLogTerm > rf.currentTerm || args.LastLogIndex >= len(rf.log)-1
+	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && updated {
+		fmt.Printf("RequestVote Success from %d to %d\n", args.CandidateId, rf.me)
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = true
+	}
 }
 
 //
