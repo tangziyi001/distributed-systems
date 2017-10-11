@@ -88,8 +88,8 @@ func min(x,y int) int {
 }
 
 // Generate a random timeout in milliseconds
-func randTimeOut() int {
-	return rand.Intn(300)+700
+func randTimeOut(base int) time.Duration {
+	return time.Duration(rand.Intn(300)+base)*time.Millisecond
 }
 // return currentTerm and whether this server
 // believes it is the leader.
@@ -182,8 +182,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// Your code here (2A, 2B).
+	fmt.Printf("RequestVote Sent from %d (Term %d) to %d (currentTerm %d)\n", args.CandidateId, args.Term, rf.me, rf.currentTerm)
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
+		rf.votedFor = -1
 		rf.state = FOLLOWER
 	}
 	if args.Term < rf.currentTerm {
@@ -193,13 +195,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 	var updated bool
-	updated = args.LastLogTerm > rf.currentTerm ||
-		(args.LastLogTerm == rf.currentTerm && args.LastLogIndex >= len(rf.log))
+	var lastLogTerm = rf.log[len(rf.log)-1].Term
+	var lastLogIndex = len(rf.log)-1
+	updated = args.LastLogTerm > lastLogTerm ||
+		(args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && updated {
 		fmt.Printf("RequestVote Success from %d to %d\n", args.CandidateId, rf.me)
 		rf.votedFor = args.CandidateId
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
+	} else {
+		if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
+			fmt.Printf("RequestVote %d-%d Failed: vote used; votedFor %d\n", args.CandidateId, rf.me, rf.votedFor)
+		} else {
+			fmt.Printf("RequestVote %d-%d Failed: Log outdated: (arg term: %d arg index: %d) (cur term: %d cur index: %d)\n", args.CandidateId, rf.me, args.LastLogTerm, args.LastLogIndex, lastLogTerm, lastLogIndex)
+		}
 	}
 	rf.RequestVoteLog(args, reply)
 }
@@ -276,13 +286,14 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) issueRequestVote() {
+	fmt.Printf("Server %d issues RequestVote in term %d\n", rf.me, rf.currentTerm)
 	workChan := make(chan *RequestVoteReply, len(rf.peers))
 	for n := 0; n < len(rf.peers); n++ {
 		if n == rf.me {
 			continue
 		}
 		go func(i int) {
-			args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: len(rf.log), LastLogTerm: rf.log[len(rf.log)].Term}
+			args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: len(rf.log)-1, LastLogTerm: rf.log[len(rf.log)-1].Term}
 			var reply RequestVoteReply
 			res := rf.sendRequestVote(i, &args, &reply)
 			if res == true {
@@ -308,9 +319,13 @@ func (rf *Raft) issueRequestVote() {
 		}
 		if len(successReplies) >= majority {
 			rf.mu.Lock()
+			fmt.Printf("CANDIDATE SUCCESS %d: get votes %d\n", rf.me, len(successReplies)+1)
 			// Become Leader
 			rf.state = LEADER
+			go rf.issueAppendEntries()
 			rf.mu.Unlock()
+		} else {
+			fmt.Printf("CANDIDATE FAILED %d: get votes %d\n", rf.me, len(successReplies)+1)
 		}
 	}()
 }
@@ -321,7 +336,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	fmt.Printf("AppendEntries Sent from %d (Term %d) to %d (currentTerm %d)\n", args.LeaderId, args.Term, rf.me, rf.currentTerm)
 	rf.timeout = 0
-	if args.Term > rf.currentTerm {
+	if args.Term >= rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.state = FOLLOWER
 		rf.votedFor = -1
@@ -337,20 +352,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	sz := min(len(rf.log), len(args.Entries))
-	idx := sz+1
+	idx := sz
 	// Find conflict entry
-	for i := 1; i <= sz; i++ {
+	for i := 0; i < sz; i++ {
 		if rf.log[i] != args.Entries[i] {
 			idx = i;
 			break
 		}
 	}
-	// Overwrite log
-	for i := idx; i <= sz; i++ {
-		rf.log[i] = args.Entries[i]
-	}
-	// Append if any
-	for i := sz+1; i <= len(args.Entries); i++ {
+	// Delete this entry and all that follow it
+	rf.log = rf.log[:idx]
+	// Append logs
+	for i := idx; i < len(args.Entries); i++ {
 		rf.log = append(rf.log, args.Entries[i])
 	}
 	if args.LeaderCommit > rf.commitIndex {
@@ -430,12 +443,12 @@ func (rf *Raft) issueAppendEntries() {
 	}
 
 	go func(){
-		var successReplies []*RequestVoteReply
+		var successReplies []*AppendEntriesReply
 		var nReplies int
 		majority := len(rf.peers)/2
 		for r := range workChan {
 			nReplies++
-			if r != nil && r.VoteGranted {
+			if r != nil {
 				successReplies = append(successReplies, r)
 			}
 			if nReplies == len(rf.peers)-1 || len(successReplies) == majority {
@@ -443,10 +456,7 @@ func (rf *Raft) issueAppendEntries() {
 			}
 		}
 		if len(successReplies) >= majority {
-			rf.mu.Lock()
-			// Become Leader
-			rf.state = LEADER
-			rf.mu.Unlock()
+			// TODO
 		}
 	}()
 }
@@ -536,10 +546,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go func(){
 		for {
+			rf.mu.Lock()
 			if rf.state == FOLLOWER {
-				rf.mu.Lock()
-				if rf.timeout == 1 {
-					fmt.Printf("Server %d Timeout: Become Candidate\n", rf.me)
+				if rf.timeout == 1 && rf.votedFor == -1{
+					fmt.Printf("FOLLOWER %d Timeout: Become Candidate\n", rf.me)
 					rf.timeout = 0
 					rf.state = CANDIDATE
 					// Start Vote
@@ -550,12 +560,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				} else {
 					rf.timeout = 1
 					rf.mu.Unlock()
-					time.Sleep(randTimeOut()*time.Millisecond)
+					time.Sleep(randTimeOut(1000))
 				}
 			}
 			if rf.state == CANDIDATE {
-				rf.mu.Lock()
-				if rf.timeout == 1 {
+				if rf.timeout == 1 && rf.votedFor == -1{
+					fmt.Printf("CANDIDATE %d Timeout: Become Candidate\n", rf.me)
 					rf.currentTerm += 1
 					rf.timeout = 0
 					rf.votedFor = rf.me
@@ -563,12 +573,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					go rf.issueRequestVote()
 				} else {
 					rf.timeout = 1
+					rf.votedFor = -1
 					rf.mu.Unlock()
-					time.Sleep(randTimeOut()*time.Millisecond)
+					time.Sleep(randTimeOut(1000))
 				}
 			}
 			if rf.state == LEADER {
-
+				rf.mu.Unlock()
+				go rf.issueAppendEntries()
+				time.Sleep(randTimeOut(200))
 			}
 		}
 	}()
