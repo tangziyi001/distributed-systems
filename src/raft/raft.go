@@ -425,6 +425,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) issueAppendEntries() {
+	fmt.Printf("Server %d issues AppendEntries\n", rf.me)
 	workChan := make(chan *AppendEntriesReply, len(rf.peers))
 	for n := 0; n < len(rf.peers); n++ {
 		if n == rf.me {
@@ -546,8 +547,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go func(){
 		for {
-			rf.mu.Lock()
 			if rf.state == FOLLOWER {
+				rf.mu.Lock()
 				if rf.timeout == 1 && rf.votedFor == -1{
 					fmt.Printf("FOLLOWER %d Timeout: Become Candidate\n", rf.me)
 					rf.timeout = 0
@@ -564,7 +565,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				}
 			}
 			if rf.state == CANDIDATE {
-				if rf.timeout == 1 && rf.votedFor == -1{
+				rf.mu.Lock()
+				if rf.timeout == 1 {
 					fmt.Printf("CANDIDATE %d Timeout: Become Candidate\n", rf.me)
 					rf.currentTerm += 1
 					rf.timeout = 0
@@ -573,13 +575,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					go rf.issueRequestVote()
 				} else {
 					rf.timeout = 1
-					rf.votedFor = -1
 					rf.mu.Unlock()
 					time.Sleep(randTimeOut(1000))
 				}
 			}
 			if rf.state == LEADER {
-				rf.mu.Unlock()
 				go rf.issueAppendEntries()
 				time.Sleep(randTimeOut(200))
 			}
