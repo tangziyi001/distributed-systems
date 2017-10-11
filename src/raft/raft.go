@@ -64,6 +64,7 @@ type Raft struct {
 	// Server State
 	state int
 	timeout int
+	debug bool
 
 	// Persistent States
 	currentTerm	int
@@ -182,14 +183,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// Your code here (2A, 2B).
-	fmt.Printf("RequestVote Sent from %d (Term %d) to %d (currentTerm %d)\n", args.CandidateId, args.Term, rf.me, rf.currentTerm)
+	if rf.debug {
+		fmt.Printf("RequestVote Sent from %d (Term %d) to %d (currentTerm %d)\n", args.CandidateId, args.Term, rf.me, rf.currentTerm)
+	}
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
 		rf.state = FOLLOWER
 	}
 	if args.Term < rf.currentTerm {
-		fmt.Printf("RequestVote Failed: Term Outdated; currentTerm %d, args Term %d\n", rf.currentTerm, args.Term)
+		if rf.debug {
+			fmt.Printf("RequestVote Failed: Term Outdated; currentTerm %d, args Term %d\n", rf.currentTerm, args.Term)
+		}
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
@@ -200,21 +205,28 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	updated = args.LastLogTerm > lastLogTerm ||
 		(args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && updated {
-		fmt.Printf("RequestVote Success from %d to %d\n", args.CandidateId, rf.me)
+		if rf.debug {
+			fmt.Printf("RequestVote Success from %d to %d\n", args.CandidateId, rf.me)
+		}
 		rf.votedFor = args.CandidateId
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
 	} else {
 		if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
-			fmt.Printf("RequestVote %d-%d Failed: vote used; votedFor %d\n", args.CandidateId, rf.me, rf.votedFor)
+			if rf.debug {
+				fmt.Printf("RequestVote %d-%d Failed: vote used; votedFor %d\n", args.CandidateId, rf.me, rf.votedFor)
+			}
 		} else {
-			fmt.Printf("RequestVote %d-%d Failed: Log outdated: (arg term: %d arg index: %d) (cur term: %d cur index: %d)\n", args.CandidateId, rf.me, args.LastLogTerm, args.LastLogIndex, lastLogTerm, lastLogIndex)
+			if rf.debug {
+				fmt.Printf("RequestVote %d-%d Failed: Log outdated: (arg term: %d arg index: %d) (cur term: %d cur index: %d)\n", args.CandidateId, rf.me, args.LastLogTerm, args.LastLogIndex, lastLogTerm, lastLogIndex)
+			}
 		}
 	}
 	rf.RequestVoteLog(args, reply)
 }
 
 func (rf *Raft) RequestVoteLog(args *RequestVoteArgs, reply *RequestVoteReply) {
+	if rf.debug {
 	fmt.Printf(
 		`
 		--- RequestVote Handler for Server %d ---
@@ -249,6 +261,7 @@ func (rf *Raft) RequestVoteLog(args *RequestVoteArgs, reply *RequestVoteReply) {
 		args.LastLogIndex,
 		reply.Term,
 		reply.VoteGranted)
+	}
 }
 
 //
@@ -286,7 +299,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) issueRequestVote() {
-	fmt.Printf("Server %d issues RequestVote in term %d\n", rf.me, rf.currentTerm)
+	if rf.debug {
+		fmt.Printf("Server %d issues RequestVote in term %d\n", rf.me, rf.currentTerm)
+	}
 	workChan := make(chan *RequestVoteReply, len(rf.peers))
 	for n := 0; n < len(rf.peers); n++ {
 		if n == rf.me {
@@ -308,24 +323,39 @@ func (rf *Raft) issueRequestVote() {
 		var successReplies []*RequestVoteReply
 		var nReplies int
 		majority := len(rf.peers)/2
+		maxTerm := rf.currentTerm
 		for r := range workChan {
 			nReplies++
 			if r != nil && r.VoteGranted {
 				successReplies = append(successReplies, r)
+				if r.Term > maxTerm {
+					maxTerm = r.Term
+				}
 			}
 			if nReplies == len(rf.peers)-1 || len(successReplies) == majority {
 				break
 			}
 		}
+		if maxTerm > rf.currentTerm {
+			rf.mu.Lock()
+			rf.currentTerm = maxTerm
+			rf.state = FOLLOWER
+			rf.mu.Unlock()
+			return
+		}
 		if len(successReplies) >= majority {
 			rf.mu.Lock()
-			fmt.Printf("CANDIDATE SUCCESS %d: get votes %d\n", rf.me, len(successReplies)+1)
+			if rf.debug {
+				fmt.Printf("CANDIDATE SUCCESS %d: get votes %d\n", rf.me, len(successReplies)+1)
+			}
 			// Become Leader
 			rf.state = LEADER
 			go rf.issueAppendEntries()
 			rf.mu.Unlock()
 		} else {
-			fmt.Printf("CANDIDATE FAILED %d: get votes %d\n", rf.me, len(successReplies)+1)
+			if rf.debug {
+				fmt.Printf("CANDIDATE FAILED %d: get votes %d\n", rf.me, len(successReplies)+1)
+			}
 		}
 	}()
 }
@@ -334,7 +364,9 @@ func (rf *Raft) issueRequestVote() {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	fmt.Printf("AppendEntries Sent from %d (Term %d) to %d (currentTerm %d)\n", args.LeaderId, args.Term, rf.me, rf.currentTerm)
+	if rf.debug {
+		fmt.Printf("AppendEntries Sent from %d (Term %d) to %d (currentTerm %d)\n", args.LeaderId, args.Term, rf.me, rf.currentTerm)
+	}
 	rf.timeout = 0
 	if args.Term >= rf.currentTerm {
 		rf.currentTerm = args.Term
@@ -379,6 +411,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 }
 
 func (rf *Raft) AppendEntriesLog(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	if rf.debug {
 	fmt.Printf(
 		`
 		--- AppendEntries Handler for Server %d ---
@@ -417,6 +450,7 @@ func (rf *Raft) AppendEntriesLog(args *AppendEntriesArgs, reply *AppendEntriesRe
 		args.LeaderCommit,
 		reply.Term,
 		reply.Success)
+	}
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -425,7 +459,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) issueAppendEntries() {
-	fmt.Printf("Server %d issues AppendEntries\n", rf.me)
+	if rf.debug {
+		fmt.Printf("Server %d issues AppendEntries\n", rf.me)
+	}
 	workChan := make(chan *AppendEntriesReply, len(rf.peers))
 	for n := 0; n < len(rf.peers); n++ {
 		if n == rf.me {
@@ -447,14 +483,25 @@ func (rf *Raft) issueAppendEntries() {
 		var successReplies []*AppendEntriesReply
 		var nReplies int
 		majority := len(rf.peers)/2
+		maxTerm := rf.currentTerm
 		for r := range workChan {
 			nReplies++
 			if r != nil {
 				successReplies = append(successReplies, r)
+				if r.Term > maxTerm {
+					maxTerm = r.Term
+				}
 			}
 			if nReplies == len(rf.peers)-1 || len(successReplies) == majority {
 				break
 			}
+		}
+		if maxTerm > rf.currentTerm {
+			rf.mu.Lock()
+			rf.currentTerm = maxTerm
+			rf.state = FOLLOWER
+			rf.mu.Unlock()
+			return
 		}
 		if len(successReplies) >= majority {
 			// TODO
@@ -489,7 +536,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		term = rf.currentTerm
 		rf.log = append(rf.log, Entry{Command: command, Term: rf.currentTerm})
 	}
-	fmt.Printf("Start command %v on server %d (%v), index %d, term %d, rf_log %v\n", command, rf.me, rf.state, index, term, rf.log)
+	if rf.debug {
+		fmt.Printf("Start command %v on server %d (%v), index %d, term %d, rf_log %v\n", command, rf.me, rf.state, index, term, rf.log)
+	}
 	return index, term, isLeader
 }
 
@@ -497,7 +546,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // the tester calls Kill() when a Raft instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
-// turn off debug output from this instance.
+// turn off rf.debug output from this instance.
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
@@ -528,9 +577,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = append(rf.log, Entry{Term: 0})
 	rf.votedFor = -1
 	rf.timeout = 1
+	rf.debug = false
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
+	if rf.debug {
 	fmt.Printf(
 		`
 		Make rf %d
@@ -544,13 +594,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.state,
 		rf.votedFor,
 		rf.log)
-
+	}
 	go func(){
 		for {
 			if rf.state == FOLLOWER {
 				rf.mu.Lock()
 				if rf.timeout == 1 && rf.votedFor == -1{
-					fmt.Printf("FOLLOWER %d Timeout: Become Candidate\n", rf.me)
+					if rf.debug {
+						fmt.Printf("FOLLOWER %d Timeout: Become Candidate\n", rf.me)
+					}
 					rf.timeout = 0
 					rf.state = CANDIDATE
 					// Start Vote
@@ -561,13 +613,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				} else {
 					rf.timeout = 1
 					rf.mu.Unlock()
-					time.Sleep(randTimeOut(1000))
+					time.Sleep(randTimeOut(700))
 				}
 			}
 			if rf.state == CANDIDATE {
 				rf.mu.Lock()
 				if rf.timeout == 1 {
-					fmt.Printf("CANDIDATE %d Timeout: Become Candidate\n", rf.me)
+					if rf.debug {
+						fmt.Printf("CANDIDATE %d Timeout: Become Candidate\n", rf.me)
+					}
 					rf.currentTerm += 1
 					rf.timeout = 0
 					rf.votedFor = rf.me
@@ -576,7 +630,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				} else {
 					rf.timeout = 1
 					rf.mu.Unlock()
-					time.Sleep(randTimeOut(1000))
+					time.Sleep(randTimeOut(700))
 				}
 			}
 			if rf.state == LEADER {
