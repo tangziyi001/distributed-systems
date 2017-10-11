@@ -340,6 +340,7 @@ func (rf *Raft) issueRequestVote() {
 			rf.mu.Lock()
 			rf.currentTerm = maxTerm
 			rf.state = FOLLOWER
+			rf.timeout = 0
 			rf.mu.Unlock()
 			return
 		}
@@ -350,7 +351,7 @@ func (rf *Raft) issueRequestVote() {
 			}
 			// Become Leader
 			rf.state = LEADER
-			go rf.issueAppendEntries()
+			go rf.issueAppendEntries(true)
 			rf.mu.Unlock()
 		} else {
 			if rf.debug {
@@ -458,7 +459,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
-func (rf *Raft) issueAppendEntries() {
+func (rf *Raft) issueAppendEntries(hb bool) {
 	if rf.debug {
 		fmt.Printf("Server %d issues AppendEntries\n", rf.me)
 	}
@@ -500,11 +501,15 @@ func (rf *Raft) issueAppendEntries() {
 			rf.mu.Lock()
 			rf.currentTerm = maxTerm
 			rf.state = FOLLOWER
+			rf.timeout = 0
 			rf.mu.Unlock()
 			return
 		}
 		if len(successReplies) >= majority {
 			// TODO
+		} else if !hb {
+			// Retry Indefinitely
+			go rf.issueAppendEntries(false)
 		}
 	}()
 }
@@ -526,19 +531,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	defer rf.mu.Unlock()
 	index := -1
 	term := -1
-	isLeader := true
+	isLeader := false
 
 	// Your code here (2B).
 	isLeader = (rf.state == LEADER)
 
 	if isLeader == true {
-		index = len(rf.log)+1
+		index = len(rf.log)
 		term = rf.currentTerm
 		rf.log = append(rf.log, Entry{Command: command, Term: rf.currentTerm})
 	}
 	if rf.debug {
 		fmt.Printf("Start command %v on server %d (%v), index %d, term %d, rf_log %v\n", command, rf.me, rf.state, index, term, rf.log)
 	}
+	go rf.issueAppendEntries(false)
 	return index, term, isLeader
 }
 
@@ -576,7 +582,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Placeholder Entry at index 0
 	rf.log = append(rf.log, Entry{Term: 0})
 	rf.votedFor = -1
-	rf.timeout = 1
+	rf.timeout = 0
 	rf.debug = false
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -615,6 +621,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					rf.mu.Unlock()
 					time.Sleep(randTimeOut(700))
 				}
+				continue
 			}
 			if rf.state == CANDIDATE {
 				rf.mu.Lock()
@@ -632,9 +639,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					rf.mu.Unlock()
 					time.Sleep(randTimeOut(700))
 				}
+				continue
 			}
 			if rf.state == LEADER {
-				go rf.issueAppendEntries()
+				go rf.issueAppendEntries(true)
 				time.Sleep(randTimeOut(200))
 			}
 		}
