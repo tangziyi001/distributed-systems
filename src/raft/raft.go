@@ -23,6 +23,7 @@ import "fmt"
 // import "bytes"
 // import "encoding/gob"
 import "math/rand"
+import "time"
 
 const (
 	FOLLOWER = iota
@@ -275,7 +276,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) issueRequestVote() {
-	workChan := make(chan *RequestReply, len(rf.peers))
+	workChan := make(chan *RequestVoteReply, len(rf.peers))
 	for n := 0; n < len(rf.peers); n++ {
 		if n == rf.me {
 			continue
@@ -306,10 +307,12 @@ func (rf *Raft) issueRequestVote() {
 			}
 		}
 		if len(successReplies) >= majority {
+			rf.mu.Lock()
 			// Become Leader
 			rf.state = LEADER
+			rf.mu.Unlock()
 		}
-	}
+	}()
 }
 
 // Handler for AppendEntries RPC
@@ -321,6 +324,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.state = FOLLOWER
+		rf.votedFor = -1
 	}
 	if args.Term < rf.currentTerm {
 		reply.Success = false
@@ -407,6 +411,45 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
+func (rf *Raft) issueAppendEntries() {
+	workChan := make(chan *AppendEntriesReply, len(rf.peers))
+	for n := 0; n < len(rf.peers); n++ {
+		if n == rf.me {
+			continue
+		}
+		go func(i int) {
+			args := AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: len(rf.log)-1, PrevLogTerm: rf.log[len(rf.log)-1].Term, Entries: rf.log, LeaderCommit: rf.commitIndex}
+			var reply AppendEntriesReply
+			res := rf.sendAppendEntries(i, &args, &reply)
+			if res == true {
+				workChan <- &reply
+			} else {
+				workChan <- nil
+			}
+		}(n)
+	}
+
+	go func(){
+		var successReplies []*RequestVoteReply
+		var nReplies int
+		majority := len(rf.peers)/2
+		for r := range workChan {
+			nReplies++
+			if r != nil && r.VoteGranted {
+				successReplies = append(successReplies, r)
+			}
+			if nReplies == len(rf.peers)-1 || len(successReplies) == majority {
+				break
+			}
+		}
+		if len(successReplies) >= majority {
+			rf.mu.Lock()
+			// Become Leader
+			rf.state = LEADER
+			rf.mu.Unlock()
+		}
+	}()
+}
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -474,7 +517,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = append(rf.log, Entry{Term: 0})
 	rf.votedFor = -1
 	rf.timeout = 1
-
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
@@ -494,20 +536,40 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go func(){
 		for {
-			time.Sleep(randTimeOut())
-			rf.mu.Lock()
 			if rf.state == FOLLOWER {
+				rf.mu.Lock()
 				if rf.timeout == 1 {
 					fmt.Printf("Server %d Timeout: Become Candidate\n", rf.me)
+					rf.timeout = 0
 					rf.state = CANDIDATE
 					// Start Vote
 					rf.currentTerm += 1
 					rf.votedFor = rf.me
-
+					rf.mu.Unlock()
+					go rf.issueRequestVote()
+				} else {
+					rf.timeout = 1
+					rf.mu.Unlock()
+					time.Sleep(randTimeOut()*time.Millisecond)
 				}
 			}
-			rf.timeout = 1
-			rf.mu.Unlock()
+			if rf.state == CANDIDATE {
+				rf.mu.Lock()
+				if rf.timeout == 1 {
+					rf.currentTerm += 1
+					rf.timeout = 0
+					rf.votedFor = rf.me
+					rf.mu.Unlock()
+					go rf.issueRequestVote()
+				} else {
+					rf.timeout = 1
+					rf.mu.Unlock()
+					time.Sleep(randTimeOut()*time.Millisecond)
+				}
+			}
+			if rf.state == LEADER {
+
+			}
 		}
 	}()
 	return rf
