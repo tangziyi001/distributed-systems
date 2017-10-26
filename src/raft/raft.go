@@ -355,7 +355,6 @@ func (rf *Raft) issueRequestVote() {
 				break
 			}
 		}
-		rf.mu.Unlock()
 		if len(successReplies) >= majority {
 			rf.mu.Lock()
 			if rf.debug {
