@@ -572,7 +572,6 @@ func (rf *Raft) issueSingleAppendEntries(i int, curTerm int, hb bool, prevLogInd
 				rf.nextIndex[i] = args.PrevLogIndex
 				args.PrevLogIndex = rf.nextIndex[i]-1
 				if args.PrevLogIndex < 0 || args.PrevLogIndex >= len(rf.log) {
-					rf.mu.Unlock()
 					return
 				}
 				args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
