@@ -205,7 +205,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if args.Term < rf.currentTerm {
 		if rf.debug {
-			fmt.Printf("RequestVote Failed: Term Outdated; currentTerm %d, args Term %d\n", rf.currentTerm, args.Term)
+			fmt.Printf("RequestVote Fa: Term Outdated; currentTerm %d, args Term %d\n", rf.currentTerm, args.Term)
 		}
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
@@ -223,15 +223,20 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = args.CandidateId
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
+		rf.mu.Unlock()
 		rf.timerChan <- true
+		rf.mu.Lock()
+		if rf.debug {
+			fmt.Printf("Timer for server %d is reset for voting\n", rf.me)
+		}
 	} else {
 		if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
 			if rf.debug {
-				fmt.Printf("RequestVote %d-%d Failed: vote used; votedFor %d\n", args.CandidateId, rf.me, rf.votedFor)
+				fmt.Printf("RequestVote %d-%d Fa: vote used; votedFor %d\n", args.CandidateId, rf.me, rf.votedFor)
 			}
 		} else {
 			if rf.debug {
-				fmt.Printf("RequestVote %d-%d Failed: Log outdated: (arg term: %d arg index: %d) (cur term: %d cur index: %d)\n", args.CandidateId, rf.me, args.LastLogTerm, args.LastLogIndex, lastLogTerm, lastLogIndex)
+				fmt.Printf("RequestVote %d-%d Fa: Log outdated: (arg term: %d arg index: %d) (cur term: %d cur index: %d)\n", args.CandidateId, rf.me, args.LastLogTerm, args.LastLogIndex, lastLogTerm, lastLogIndex)
 			}
 		}
 	}
@@ -370,7 +375,7 @@ func (rf *Raft) issueRequestVote() {
 			rf.issueAppendEntries(true)
 		} else {
 			if rf.debug {
-				fmt.Printf("CANDIDATE FAILED %d: get votes %d\n\n", rf.me, len(successReplies)+1)
+				fmt.Printf("CANDIDATE Fa %d: get votes %d\n\n", rf.me, len(successReplies)+1)
 			}
 		}
 	}()
@@ -388,7 +393,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Term = rf.currentTerm
 		return
 	}
+	rf.mu.Unlock()
 	rf.timerChan <- true
+	rf.mu.Lock()
 	if args.Term >= rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.state = FOLLOWER
@@ -434,7 +441,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if rf.debug {
 		fmt.Printf("Updated log for server %d: \n %v\n", rf.me, rf.log)
-		fmt.Printf("Commit Index %d; Last Appled %d, LeaderCommit %d, Last New Entry\n", rf.commitIndex, rf.lastApplied, args.LeaderCommit, rf.lastNewEntry)
+		fmt.Printf("Commit Index %d; Last Appled %d, LeaderCommit %d, Last New Entry %d\n\n", rf.commitIndex, rf.lastApplied, args.LeaderCommit, rf.lastNewEntry)
 	}
 
 	// Apply commands
@@ -801,6 +808,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			time.Sleep(200*time.Millisecond)
 		}
 	}()
+
 
 	return rf
 }
