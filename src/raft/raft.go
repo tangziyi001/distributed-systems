@@ -571,7 +571,7 @@ func (rf *Raft) issueSingleAppendEntries(i int, curTerm int, hb bool, prevLogInd
 				// Decrement nextIndex and Retry
 				rf.nextIndex[i] = args.PrevLogIndex
 				args.PrevLogIndex = rf.nextIndex[i]-1
-				if args.PrevLogIndex < 0 {
+				if args.PrevLogIndex < 0 || args.PrevLogIndex >= len(rf.log) {
 					rf.mu.Unlock()
 					return
 				}
