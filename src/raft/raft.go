@@ -567,13 +567,14 @@ func (rf *Raft) issueSingleAppendEntries(i int, curTerm int, hb bool, prevLogInd
 				if rf.debug {
 					fmt.Printf("Decrement NextIndex for server %d from %d\n", i, rf.nextIndex[i], args.Entries)
 				}
+
 				// Decrement nextIndex and Retry
-				rf.nextIndex[i] = rf.nextIndex[i]-1
+				rf.nextIndex[i] = args.PrevLogIndex
 				args.PrevLogIndex = rf.nextIndex[i]-1
-				// if args.PrevLogIndex < 0 {
-				// 	rf.mu.Unlock()
-				// 	return
-				// }
+				if args.PrevLogIndex < 0 {
+					rf.mu.Unlock()
+					return
+				}
 				args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
 				rf.mu.Unlock()
 				continue
@@ -631,9 +632,7 @@ func (rf *Raft) checkCommit() {
 		for i := startIndex+1; i <= M; i++ {
 			command := rf.log[i].Command
 			index := i
-			// rf.mu.Unlock()
 			rf.commitChan <- ApplyMsg{Index: index, Command: command}
-			// rf.mu.Lock()
 		}
 		if rf.debug {
 			fmt.Printf("!!! Leader commitIndex Update: from %d to %d !!!\n\n", startIndex, M)
