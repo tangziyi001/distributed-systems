@@ -466,7 +466,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// Update commitIndex
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, rf.lastNewEntry)
+		rf.commitIndex = min(args.LeaderCommit, len(rf.log))
 	}
 
 	if rf.debug {
@@ -772,8 +772,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	rf.commitChan = applyCh
 	rf.timerChan = make(chan bool)
+	rf.commitChan = make(chan ApplyMsg)
 	// Your initialization code here (2A, 2B, 2C).
 	rf.currentTerm = 0
 	rf.state = FOLLOWER
@@ -847,6 +847,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			}
 			rf.mu.Unlock()
 			time.Sleep(200*time.Millisecond)
+		}
+	}()
+
+	// Apply
+	go func(){
+		for {
+			newMessage := <- rf.commitChan
+			applyCh <- newMessage
 		}
 	}()
 
