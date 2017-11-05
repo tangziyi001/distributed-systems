@@ -411,9 +411,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Term = rf.currentTerm
 		return
 	}
-	//rf.mu.Unlock()
+	rf.mu.Unlock()
 	rf.timerChan <- true
-	//rf.mu.Lock()
+	rf.mu.Lock()
 	if args.Term >= rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.state = FOLLOWER
