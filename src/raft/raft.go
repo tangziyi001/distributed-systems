@@ -324,11 +324,12 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) issueRequestVote() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if rf.debug {
 		fmt.Printf("Server %d issues RequestVote in term %d\n", rf.me, rf.currentTerm)
 	}
 	workChan := make(chan *RequestVoteReply, len(rf.peers))
-	rf.mu.Lock()
 	args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me, LastLogIndex: len(rf.log)-1, LastLogTerm: rf.log[len(rf.log)-1].Term}
 	for n := 0; n < len(rf.peers); n++ {
 		if n == rf.me {
@@ -344,7 +345,6 @@ func (rf *Raft) issueRequestVote() {
 			}
 		}(n)
 	}
-	rf.mu.Unlock()
 
 	go func(){
 		var successReplies []*RequestVoteReply
@@ -431,6 +431,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				}
 			}
 			reply.ConflictIndex = i+1
+		} else {
+			reply.ConflictIndex = len(rf.log)
 		}
 		reply.Success = false
 		reply.Term = rf.currentTerm
@@ -468,7 +470,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if rf.debug {
-		fmt.Printf("Updated log for server %d: \n %v\n", rf.me, rf.log)
+		fmt.Printf("Updated log for server %d: \n %v\n", rf.me, rf.log[len(rf.log)-1])
 		fmt.Printf("Commit Index %d; Last Appled %d, LeaderCommit %d, Last New Entry %d\n\n", rf.commitIndex, rf.lastApplied, args.LeaderCommit, rf.lastNewEntry)
 	}
 
@@ -557,7 +559,7 @@ func (rf *Raft) issueSingleAppendEntries(i int, curTerm int, hb bool, prevLogInd
 	rf.mu.Unlock()
 	for {
 		rf.mu.Lock()
-		if rf.state != LEADER || curTerm != rf.currentTerm {
+		if rf.state != LEADER || curTerm != rf.currentTerm || rf.commitIndex != commitIndex {
 			return
 		}
 		nextIdx := args.PrevLogIndex + 1
@@ -572,7 +574,7 @@ func (rf *Raft) issueSingleAppendEntries(i int, curTerm int, hb bool, prevLogInd
 		rf.mu.Unlock()
 		res := rf.sendAppendEntries(i, &args, &reply)
 		rf.mu.Lock()
-		if rf.currentTerm != curTerm || rf.state != LEADER {
+		if rf.currentTerm != curTerm || rf.state != LEADER || rf.commitIndex != commitIndex {
 			return
 		}
 		if res == true {
