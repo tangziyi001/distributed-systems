@@ -415,9 +415,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.timerChan <- true
 	rf.mu.Lock()
 	if args.Term >= rf.currentTerm {
+		if args.Term > rf.currentTerm {
+			rf.votedFor = -1
+		}
 		rf.currentTerm = args.Term
 		rf.state = FOLLOWER
-		rf.votedFor = -1
 	}
 
 	// Log Inconsistent
