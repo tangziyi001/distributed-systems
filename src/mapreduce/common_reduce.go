@@ -70,7 +70,7 @@ func doReduce(
 		infile.Close()
 	}
 	for key, val := range re {
-		// fmt.Printf("%v %v\n", key, reduceF(key,val))
+		// fmt.Printf("KEY: %v, VAL: %v\n", key, reduceF(key,val))
 		err := enc.Encode(KeyValue{key, reduceF(key, val)})
 		if err != nil {
 			fmt.Println(err)
