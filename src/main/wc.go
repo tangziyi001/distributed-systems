@@ -4,7 +4,14 @@ import (
 	"fmt"
 	"mapreduce"
 	"os"
+	"strings"
+	"strconv"
+	"unicode"
 )
+
+func parserFunc(c rune) bool {
+	return !unicode.IsLetter(c) && !unicode.IsNumber(c)
+}
 
 //
 // The map function is called once for each file of input. The first
@@ -15,6 +22,16 @@ import (
 //
 func mapF(filename string, contents string) []mapreduce.KeyValue {
 	// TODO: you have to write this function
+	s := strings.FieldsFunc(contents, parserFunc)
+	var re []mapreduce.KeyValue
+	for i := 0; i < len(s); i++ {
+		word := s[i]
+		var kv mapreduce.KeyValue
+		kv.Key = word
+		kv.Value = "1"
+		re = append(re, kv)
+	}
+	return re
 }
 
 //
@@ -24,6 +41,17 @@ func mapF(filename string, contents string) []mapreduce.KeyValue {
 //
 func reduceF(key string, values []string) string {
 	// TODO: you also have to write this function
+	var re int
+	re = 0
+	for i := 0; i < len(values); i++ {
+		num, err := strconv.ParseInt(values[i], 10, 64)
+		if err != nil {
+			fmt.Println(err)
+		}
+		re += int(num)
+	}
+	// fmt.Printf("Key: %v, Val %v\n", key, re)
+	return strconv.Itoa(re)
 }
 
 // Can be run in 3 ways:
