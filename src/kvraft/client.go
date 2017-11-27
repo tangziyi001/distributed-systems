@@ -3,11 +3,19 @@ package raftkv
 import "labrpc"
 import "crypto/rand"
 import "math/big"
+import "sync"
+import "fmt"
+// import "time"
 
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	debug bool
+	lastLeader int // Keep track of the leader of the last RPC
+	id int
+	count int
+	mu sync.Mutex
 }
 
 func nrand() int64 {
@@ -18,9 +26,12 @@ func nrand() int64 {
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
+	// You'll have to add code here.
 	ck := new(Clerk)
 	ck.servers = servers
-	// You'll have to add code here.
+	ck.debug = false
+	ck.count = 0
+	ck.lastLeader = -1
 	return ck
 }
 
@@ -37,9 +48,36 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-
 	// You will have to modify this function.
-	return ""
+	id := nrand()
+	args := GetArgs{Key:key, Id:id}
+	retry := 0
+	leader := -1
+	if ck.debug {
+		fmt.Printf("\nClient Get, key %v, id %v\n", key, id)
+	}
+	for {
+		var reply GetReply
+		ck.mu.Lock()
+		if ck.lastLeader != -1 && leader == -1 {
+			leader = ck.lastLeader
+		} else if leader == -1 {
+			leader = 0
+		}
+		ck.mu.Unlock()
+		ok := ck.servers[leader].Call("RaftKV.Get", &args, &reply)
+		if !ok  || reply.WrongLeader {
+			retry += 1
+			leader += 1
+			leader %= len(ck.servers)
+			continue
+		} else {
+			if ck.debug {
+				fmt.Printf("Client Get Success, args %v, reply %v\n\n", args, reply)
+			}
+			return reply.Value
+		}
+	}
 }
 
 //
@@ -54,6 +92,58 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	id := nrand()
+	args := PutAppendArgs{Key:key, Value:value, Op:op, Id: id}
+	retry := 0
+	leader := -1
+	if ck.debug {
+		fmt.Printf("\nClient PutAppends, key %v, value %v, id %v\n", key, value, id)
+	}
+	for {
+		var reply PutAppendReply
+		ck.mu.Lock()
+		if ck.lastLeader != -1 && leader == -1 {
+			leader = ck.lastLeader
+		} else if leader == -1 {
+			leader = 0
+		}
+		ck.mu.Unlock()
+		ok := ck.servers[leader].Call("RaftKV.PutAppend", &args, &reply)
+		// // Handle Request Timeout
+		// req := make(chan bool, 1)
+		// go func () {
+		// 	req <- ck.servers[leader].Call("RaftKV.PutAppend", &args, &reply)
+		// }()
+		// var ok bool
+		// select {
+		// case ok = <- req:
+		// 	// if ck.debug {
+		// 	// 	fmt.Printf("Client PutAppend OK, args %v, reply %v\n", args, reply)
+		// 	// }
+		// case <- time.After(500*time.Millisecond):
+		// 	if ck.debug {
+		// 		fmt.Printf("Client PutAppend Timeout, args %v, reply %v, leader %d\n", args, reply, leader)
+		// 	}
+		// 	ok = false
+		// }
+		if !ok  || reply.WrongLeader == true {
+			retry += 1
+			leader += 1
+			leader %= len(ck.servers)
+			// if ck.debug {
+			// 	fmt.Printf("Client PutAppend Retry Wrong Leader, args %v, reply %v\n", args, reply)
+			// }
+			continue
+		} else {
+			ck.mu.Lock()
+			ck.lastLeader = leader
+			if ck.debug {
+				fmt.Printf("Client PutAppend Success, args %v, reply %v\n\n", args, reply)
+			}
+			ck.mu.Unlock()
+			break
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
