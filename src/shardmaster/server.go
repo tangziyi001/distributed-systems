@@ -153,7 +153,13 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	if args.Num == -1 {
 		reply.Config = sm.configs[len(sm.configs)-1]
 	} else {
-		reply.Config = sm.configs[args.Num]
+		if args.Num < len(sm.configs) {
+			reply.Config = sm.configs[args.Num]
+		} else {
+			reply.WrongLeader = true
+			sm.mu.Unlock()
+			return
+		}
 	}
 	if sm.debug {
 		fmt.Printf("SM Server %d reply QUERY, config %v\n", sm.me, reply.Config)
