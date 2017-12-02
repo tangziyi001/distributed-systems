@@ -9,10 +9,11 @@ type Err string
 
 // Put or Append
 type PutAppendArgs struct {
-	Id int64
+	Id int
 	Key   string
 	Value string
 	Op    string // "Put" or "Append"
+	ClientId int64
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
@@ -24,8 +25,9 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Id int64
+	Id int
 	Key string
+	ClientId int64
 }
 
 type GetReply struct {

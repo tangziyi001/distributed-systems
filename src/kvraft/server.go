@@ -2,6 +2,7 @@ package raftkv
 
 import (
 	"encoding/gob"
+	"bytes"
 	"labrpc"
 	"log"
 	"raft"
@@ -24,11 +25,12 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Id int64
+	Id int
 	Key	string
 	Value string
 	Action string
 	ServerId int
+	ClientId int64
 }
 
 type RaftKV struct {
@@ -43,10 +45,10 @@ type RaftKV struct {
 	KVStore map[string]string
 	// The channel for each Key
 	KVChan map[int64](chan Op)
-	// The lookup map to detect different request
+	// The lookup map to detect different request for a given index
 	KVLookup map[int](Op)
 	// Keep track of completed requests
-	KVComplete map[int64]int
+	KVComplete map[int64]int // ClientId, Id
 	debug bool
 }
 
@@ -63,19 +65,19 @@ func (kv *RaftKV) ReplicateEntries(entry Op) bool {
 		}
 		// Check if the entry exists
 		kv.mu.Lock()
-		_, ok := kv.KVChan[entry.Id]
+		_, ok := kv.KVChan[entry.ClientId]
 		if !ok {
 			if kv.debug {
-				fmt.Printf("Init Channel for ID %d\n", entry.Id)
+				fmt.Printf("Init Channel for Client ID %d\n", entry.ClientId)
 			}
-			kv.KVChan[entry.Id] = make(chan Op, 1)
+			kv.KVChan[entry.ClientId] = make(chan Op, 1)
 		}
 		kv.mu.Unlock()
 		// Wait for the response
 		select {
-		case op := <- kv.KVChan[entry.Id]:
+		case op := <- kv.KVChan[entry.ClientId]:
 			if kv.debug {
-				fmt.Printf("KV Server %d receive op %v from channl of ID %v\n", kv.me, op, entry.Id)
+				fmt.Printf("KV Server %d receive op %v from channl of Client ID %v\n", kv.me, op, entry.ClientId)
 			}
 			if op == entry {
 				break
@@ -84,7 +86,7 @@ func (kv *RaftKV) ReplicateEntries(entry Op) bool {
 			}
 		case <- time.After(300*time.Millisecond):
 			if kv.debug {
-				fmt.Printf("KV Server %d channel timeout for op id %v\n", kv.me, entry.Id)
+				fmt.Printf("KV Server %d channel timeout for op id %v\n", kv.me, entry.ClientId)
 			}
 			return false
 		}
@@ -97,7 +99,7 @@ func (kv *RaftKV) ReplicateEntries(entry Op) bool {
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	entry := Op{Id: args.Id, Key: args.Key, Value: "", Action: "Get", ServerId: kv.me}
+	entry := Op{Id: args.Id, Key: args.Key, Value: "", Action: "Get", ServerId: kv.me, ClientId: args.ClientId}
 	suc := kv.ReplicateEntries(entry)
 	if !suc {
 		reply.WrongLeader = true
@@ -118,13 +120,13 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	// Check if the request has already been processed
 	kv.mu.Lock()
-	_, exist :=  kv.KVComplete[args.Id]
+	val, exist :=  kv.KVComplete[args.ClientId]
 	kv.mu.Unlock()
-	if exist {
+	if exist && val >= args.Id {
 		reply.WrongLeader = false
 		return
 	}
-	entry := Op{Id: args.Id, Key: args.Key, Value: args.Value, Action: args.Op, ServerId: kv.me}
+	entry := Op{Id: args.Id, Key: args.Key, Value: args.Value, Action: args.Op, ServerId: kv.me, ClientId: args.ClientId}
 	suc := kv.ReplicateEntries(entry)
 	if suc {
 		reply.WrongLeader = false
@@ -141,7 +143,7 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 //
 func (kv *RaftKV) Kill() {
 	kv.rf.Kill()
-	// Your code here, if desired.
+	// Your code here, if desired
 }
 
 //
@@ -183,81 +185,119 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		for {
 			message := <- kv.applyCh
 			if kv.debug {
-				fmt.Printf("KV Server %d receives msg from Raft %v\n", kv.me, message)
+				fmt.Printf("KV Server %d receives msg from Raft\n", kv.me)
 			}
 
 			// Receive a message from Raft
-			op := message.Command.(Op)
 			idx := message.Index
-
-			// Detect lost leadership by checking if index has a different request
-			kv.mu.Lock()
-			val, ok := kv.KVLookup[idx]
-			if ok && val != op {
+			if idx == -1 && message.UseSnapshot { // Snapshot data is in the command
 				if kv.debug {
-					fmt.Printf("KV Server %d detect different request %v against %v for index %d\n", kv.me, val, op, idx)
+					fmt.Printf("Server %d applys snapshot\n", kv.me)
 				}
+				var LastIncludedIndex int
+				var LastIncludedTerm int
+				r := bytes.NewBuffer(message.Snapshot)
+				d := gob.NewDecoder(r)
+				d.Decode(&LastIncludedIndex)
+				d.Decode(&LastIncludedTerm)
+				kv.mu.Lock()
+				d.Decode(&kv.KVStore)
+				d.Decode(&kv.KVComplete)
+				// d.Decode(&kv.KVLookup)
 				kv.mu.Unlock()
-				continue
-			}
-			if !ok {
-				kv.KVLookup[idx] = op
-			}
-			if kv.debug {
-				fmt.Printf("KV Server %d SUCCESSFULLY replicated %v\n", kv.me, op)
-			}
-
-			// Apply PutAppend command
-			_, exist :=  kv.KVComplete[op.Id]
-			if op.Action != "Get" && !exist {
-				kv.KVComplete[op.Id] = 1
-				_, ok := kv.KVStore[op.Key]
-				// Check PUT and APPEND
+			} else {
+				op := message.Command.(Op)
+				// Detect lost leadership by checking if index has a different request
+				kv.mu.Lock()
+				e, ok := kv.KVLookup[idx]
+				if ok && e != op {
+					if kv.debug {
+						fmt.Printf("KV Server %d detect different request %v against %v for index %d\n", kv.me, e, op, idx)
+					}
+					kv.mu.Unlock()
+					continue
+				}
 				if !ok {
-					kv.KVStore[op.Key] = op.Value
-				} else {
-					if op.Action == "Put" {
+					kv.KVLookup[idx] = op
+				}
+				if kv.debug {
+					fmt.Printf("KV Server %d SUCCESSFULLY replicated %v\n", kv.me, op)
+				}
+
+				// Apply PutAppend command, check if dup
+				val, exist :=  kv.KVComplete[op.ClientId]
+				if op.Action != "Get" && (!exist || val < op.Id) {
+					kv.KVComplete[op.ClientId] = op.Id
+					_, ok := kv.KVStore[op.Key]
+					// Check PUT and APPEND
+					if !ok {
 						kv.KVStore[op.Key] = op.Value
 					} else {
-						kv.KVStore[op.Key] += op.Value
+						if op.Action == "Put" {
+							kv.KVStore[op.Key] = op.Value
+						} else {
+							kv.KVStore[op.Key] += op.Value
+						}
 					}
+					if kv.debug {
+						fmt.Printf("KV Server %d Applies Client %d's PutAppend op %v\n", kv.me, op.ClientId, op)
+					}
+				} else if op.Action != "Get" && kv.debug {
+					fmt.Printf("KV Server %d detects dup for Client %d, op %v\n", kv.me, op.ClientId, op)
 				}
-			}
 
-			// The commit is not requested by this server
-			if op.ServerId != kv.me {
+				// Issue snapshot
 				if kv.debug {
-					fmt.Printf("KV Server %d is not responsible for %v\n", kv.me, op.ServerId)
+					fmt.Printf("--- KV Server %d Check Size: now %d, max %d\n", kv.me, kv.rf.GetRaftStateSize(), maxraftstate)
+				}
+				if maxraftstate != -1 && kv.rf.GetRaftStateSize() > maxraftstate {
+					if kv.debug {
+						fmt.Printf("--- KV Server %d issues snapshot ---\n", kv.me)
+					}
+					w := new(bytes.Buffer)
+					e := gob.NewEncoder(w)
+					e.Encode(kv.KVStore)
+					e.Encode(kv.KVComplete)
+					// e.Encode(kv.KVLookup)
+					data := w.Bytes()
+					go kv.rf.IssueSnapshot(idx, data)
+				}
+
+				// The commit is not requested by this server
+				if op.ServerId != kv.me {
+					if kv.debug {
+						fmt.Printf("KV Server %d is not responsible for %v\n", kv.me, op.ServerId)
+					}
+					kv.mu.Unlock()
+					continue
 				}
 				kv.mu.Unlock()
-				continue
-			}
-			kv.mu.Unlock()
 
-			// Response to the replicate requests
-			kv.mu.Lock()
-			_, ok = kv.KVChan[op.Id]
-			if !ok {
-				kv.KVChan[op.Id] = make(chan Op, 1)
-			}
-			kv.mu.Unlock()
-			if kv.debug {
-				fmt.Printf("KV Server %d prepares to add command %v to id channel %v\n", kv.me, op, op.Id)
-			}
-			// Remove an old op
-			select {
-			case _,ok := <- kv.KVChan[op.Id]:
-				if ok {
-					break
+				// Response to the replicate requests
+				kv.mu.Lock()
+				_, ok = kv.KVChan[op.ClientId]
+				if !ok {
+					kv.KVChan[op.ClientId] = make(chan Op, 1)
 				}
-			default:
 				if kv.debug {
-					fmt.Println("No Op ready")
+					fmt.Printf("KV Server %d prepares to add command %v to id channel %v\n", kv.me, op, op.Id)
 				}
-			}
-			kv.KVChan[op.Id] <- op
-			if kv.debug {
-				fmt.Printf("KV Server %d add command %v to id channel %v\n", kv.me, op, op.Id)
+				// Remove an old op
+				select {
+				case _,ok := <- kv.KVChan[op.ClientId]:
+					if ok {
+						break
+					}
+				default:
+					if kv.debug {
+						fmt.Println("No Op ready")
+					}
+				}
+				kv.KVChan[op.ClientId] <- op
+				if kv.debug {
+					fmt.Printf("KV Server %d add command %v to id channel %v\n", kv.me, op, op.Id)
+				}
+				kv.mu.Unlock()
 			}
 		}
 	}()

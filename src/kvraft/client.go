@@ -13,7 +13,7 @@ type Clerk struct {
 	// You will have to modify this struct.
 	debug bool
 	lastLeader int // Keep track of the leader of the last RPC
-	id int
+	id int64
 	count int
 	mu sync.Mutex
 }
@@ -32,6 +32,8 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.debug = false
 	ck.count = 0
 	ck.lastLeader = -1
+	ck.id = nrand()
+	ck.count = 0
 	return ck
 }
 
@@ -49,8 +51,11 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	id := nrand()
-	args := GetArgs{Key:key, Id:id}
+	ck.mu.Lock()
+	id := ck.count
+	ck.count += 1
+	args := GetArgs{Key:key, Id:id, ClientId: ck.id}
+	ck.mu.Unlock()
 	retry := 0
 	leader := -1
 	if ck.debug {
@@ -92,8 +97,11 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	id := nrand()
-	args := PutAppendArgs{Key:key, Value:value, Op:op, Id: id}
+	ck.mu.Lock()
+	id := ck.count
+	ck.count += 1
+	args := PutAppendArgs{Key:key, Value:value, Op:op, Id: id, ClientId: ck.id}
+	ck.mu.Unlock()
 	retry := 0
 	leader := -1
 	if ck.debug {
