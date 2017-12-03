@@ -102,7 +102,7 @@ func max(x,y int) int {
 
 // Generate a random timeout in milliseconds
 func randTimeOut(base int) time.Duration {
-	return time.Duration(rand.Intn(100)+base)*time.Millisecond
+	return time.Duration(rand.Intn(300)+base)*time.Millisecond
 }
 // return currentTerm and whether this server
 // believes it is the leader.
@@ -719,13 +719,14 @@ func (rf *Raft) issueAppendEntries(hb bool) {
 	var curTerm int
 	curTerm = rf.currentTerm
 	nextIdx := rf.nextIndex
+	firstIndex := rf.firstIndex
 	log := rf.log
 	for n := 0; n < len(rf.peers); n++ {
 		if n == rf.me {
 			continue
 		}
 		// The follower is too outdated that the leader has to send install snapshot
-		if nextIdx[n] <= rf.firstIndex {
+		if nextIdx[n] <= firstIndex {
 			go func(i int){
 				args := InstallSnapshotArgs{Term: rf.currentTerm, LeaderId: rf.me, LastIncludedIndex: rf.firstIndex, LastIncludedTerm: log[0].Term, Data: rf.persister.snapshot}
 				var reply InstallSnapshotReply
@@ -749,7 +750,9 @@ func (rf *Raft) issueAppendEntries(hb bool) {
 				rf.mu.Unlock()
 			}(n)
 		} else {
-			go rf.issueSingleAppendEntries(n, curTerm, hb, nextIdx[n]-1, log[nextIdx[n]-1-rf.firstIndex].Term, rf.commitIndex)
+			if nextIdx[n]-1-firstIndex >= 0 && nextIdx[n]-1-firstIndex < len(log) {
+				go rf.issueSingleAppendEntries(n, curTerm, hb, nextIdx[n]-1, log[nextIdx[n]-1-firstIndex].Term, rf.commitIndex)
+			}
 		}
 		rf.updateSnap = false
 	}
@@ -862,13 +865,14 @@ func (rf *Raft) readSnapshot(data []byte) {
 	rf.lastApplied = rf.commitIndex
 	// Truncate log
 	newLog := make([]Entry, 0)
-	if len(rf.log) + rf.firstIndex <= LastIncludedIndex {
+	if len(rf.log) + rf.firstIndex <= LastIncludedIndex || LastIncludedIndex < rf.firstIndex {
 		newLog = append(newLog, Entry{Term: LastIncludedTerm})
 	} else if rf.log[LastIncludedIndex-rf.firstIndex].Term == LastIncludedTerm {
 		// Retain the following logs
 		newLog = rf.log[(LastIncludedIndex-rf.firstIndex):]
 	} else {
 		fmt.Printf("LastIncludedIndex doesn't match LastIncludedTerm\n")
+		newLog = append(newLog, Entry{Term: LastIncludedTerm})
 	}
 	rf.log = newLog
 	rf.firstIndex = LastIncludedIndex
