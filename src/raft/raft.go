@@ -796,7 +796,9 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		// Retain the following logs
 		newLog = rf.log[(args.LastIncludedIndex-rf.firstIndex):]
 	} else {
-		fmt.Printf("LastIncludedIndex doesn't match LastIncludedTerm\n")
+		if rf.debug {
+			fmt.Printf("LastIncludedIndex doesn't match LastIncludedTerm\n")
+		}
 		// Replace the entire log?
 		newLog = append(newLog, Entry{Term: args.LastIncludedTerm})
 	}
