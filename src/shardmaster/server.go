@@ -179,9 +179,12 @@ func (sm *ShardMaster) Raft() *raft.Raft {
 }
 
 
-func rebalance(newConfig Config) Config {
+func (sm *ShardMaster) rebalance(newConfig Config) Config {
 	// Rebalance
 	// A map from group to shards (including new groups)
+	if sm.debug {
+		fmt.Printf("SM Server %d more rebalancing for config %v\n", sm.me, newConfig)
+	}
 	groupShard := make(map[int][]int)
 	shardNum := len(newConfig.Shards)
 	groupNum := len(newConfig.Groups)
@@ -208,14 +211,23 @@ func rebalance(newConfig Config) Config {
 				minG = g
 			}
 		}
+		// if sm.debug {
+		// 	fmt.Printf("SM Server %d rebalancing to %v. maxG %d %d, minG %d %d, s/g %d %d\n", sm.me, groupShard, maxG, maxS, minG, minS, shardNum, groupNum)
+		// }
 		// Check if another move is unnecessary
 		if len(groupShard[minG]) >= (shardNum/groupNum) && len(groupShard[maxG]) <= (shardNum/groupNum) + 1{
+			if sm.debug {
+				fmt.Printf("SM Server %d rebalancing break\n", sm.me)
+			}
 			break
 		}
 		movedShard := groupShard[maxG][0]
 		newConfig.Shards[movedShard] = minG
 		groupShard[maxG] = groupShard[maxG][1:]
 		groupShard[minG] = append(groupShard[minG], movedShard)
+	}
+	if sm.debug {
+		fmt.Printf("SM Server %d finishes rebalancing\n", sm.me)
 	}
 	return newConfig
 }
@@ -265,7 +277,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 			op := message.Command.(Op)
 			sm.mu.Lock()
 			e, ok := sm.SMLookup[idx]
-			if ok && e != op {
+			if ok && (e.Id != op.Id || e.ClientId != op.ClientId) {
 				if sm.debug {
 					fmt.Printf("SM Server %d detect different request %v against %v for index %d\n", sm.me, e, op, idx)
 				}
@@ -289,7 +301,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 				for k,v := range sm.configs[newConfigIdx-1].Groups {
 					newConfig.Groups[k] = v
 				}
-				newJoined := 0
+				newJoined := make([]int, 0)
 				if op.Action == "Join" {
 					args := op.ShardArgs.(JoinArgs)
 					// Add each new group to the config
@@ -299,7 +311,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 							if sm.debug {
 								fmt.Printf("SM JOIN %v Success: Shards %v\n", k, v)
 							}
-							newJoined += 1
+							newJoined = append(newJoined, k)
 						} else {
 							if sm.debug {
 								fmt.Printf("SM JOIN %v Failed: Group Existed\n", k)
@@ -313,9 +325,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 						if sm.debug {
 							fmt.Printf("SM %d init assign %d shards to %d groups\n", sm.me, shardNum, groupNum)
 						}
-						// Assign all shards
+						// Assign all shards to existed groups
 						for i := 0; i < shardNum; i++ {
-							newConfig.Shards[i] = (i % groupNum)+1
+							newConfig.Shards[i] = newJoined[(i % len(newJoined))]
 						}
 					} else {
 						// A map from group to shards (including new groups)
@@ -328,7 +340,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 						}
 
 						// At least numMove shards should be transfered
-						numMove := (shardNum/groupNum) * newJoined
+						numMove := (shardNum/groupNum) * len(newJoined)
 						for i := 0; i < numMove; i++ {
 							maxG := -1
 							maxS := -1
@@ -351,7 +363,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 							groupShard[maxG] = groupShard[maxG][1:]
 							groupShard[minG] = append(groupShard[minG], movedShard)
 						}
-						newConfig = rebalance(newConfig)
+						newConfig = sm.rebalance(newConfig)
 					}
 				}
 				if op.Action == "Leave" {
@@ -394,7 +406,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 						groupShard[minG] = append(groupShard[minG], s)
 						newConfig.Shards[s] = minG
 					}
-					newConfig = rebalance(newConfig)
+					newConfig = sm.rebalance(newConfig)
 				}
 				if op.Action == "Move" {
 					args := op.ShardArgs.(MoveArgs)

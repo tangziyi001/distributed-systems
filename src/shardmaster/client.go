@@ -60,6 +60,9 @@ func (ck *Clerk) Query(num int) Config {
 			var reply QueryReply
 			ok := srv.Call("ShardMaster.Query", &args, &reply)
 			if ok && reply.WrongLeader == false {
+				if ck.debug {
+					fmt.Printf("\nClient Query Success, args %v, config %v\n", args, reply.Config)
+				}
 				return reply.Config
 			}
 		}
